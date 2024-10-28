@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from functools import wraps
 from hashlib import md5
-from typing import Any, Union
+from typing import Any, Union, List
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -144,6 +144,45 @@ def split_string_by_multi_markers(content: str, markers: list[str]) -> list[str]
         return [content]
     results = re.split("|".join(re.escape(marker) for marker in markers), content)
     return [r.strip() for r in results if r.strip()]
+
+
+# Refer to https://github.com/chatchat-space/Langchain-Chatchat/blob/master/libs/chatchat-server/chatchat/server/file_rag/text_splitter/chinese_recursive_text_splitter.py
+def split_text_with_regex_from_end(
+    text: str, separator: str, keep_separator: bool
+) -> List[str]:
+    if separator:
+        if keep_separator:
+            _splits = re.split(f"({separator})", text)
+            splits = ["".join(i) for i in zip(_splits[0::2], _splits[1::2])]
+            if len(_splits) % 2 == 1:
+                splits += _splits[-1:]
+        else:
+            splits = re.split(separator, text)
+    else:
+        splits = list(text)
+    return [s for s in splits if s != ""]
+
+
+def merge_splits(splits: List[str], separator: str) -> List[str]:
+    """将多个文本块合并为一个字符串，并按需分割成列表。"""
+    merged_text = separator.join(splits)
+    return merged_text
+
+
+def clean_and_filter_chunks(chunks: list[str]) -> list[str]:
+    """清理文本块中的多余空格和换行符，并过滤掉空块。"""
+    cleaned_chunks = []
+
+    for chunk in chunks:
+        # 去除每个块前后的空白字符
+        stripped_chunk = chunk['content'].strip()
+
+        # 如果块不为空，则清理多余的换行符并添加到结果列表
+        if stripped_chunk:
+            cleaned_chunk = re.sub(r"\n{2,}", "\n", stripped_chunk)
+            cleaned_chunks.append(cleaned_chunk)
+
+    return cleaned_chunks
 
 
 # Refer the utils functions of the official GraphRAG implementation:

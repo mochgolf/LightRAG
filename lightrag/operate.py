@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from typing import Union
+from typing import Union, Any, List, Optional
 from collections import Counter, defaultdict
 import warnings
 from .utils import (
@@ -14,6 +14,9 @@ from .utils import (
     list_of_list_to_csv,
     pack_user_ass_to_openai_messages,
     split_string_by_multi_markers,
+    split_text_with_regex_from_end,
+    merge_splits,
+    clean_and_filter_chunks,
     truncate_list_by_token_size,
 )
 from .base import (
@@ -44,6 +47,86 @@ def chunking_by_token_size(
                 "chunk_order_index": index,
             }
         )
+    return results
+
+
+# Refer to https://github.com/chatchat-space/Langchain-Chatchat/blob/master/libs/chatchat-server/chatchat/server/file_rag/text_splitter/chinese_recursive_text_splitter.py
+def chunking_by_sentence(
+    content: str,
+    overlap_token_size=128,
+    max_token_size=1024,
+    tiktoken_model="gpt-4o",
+    separators: Optional[List[str]] = None,
+    keep_separator: bool = True,
+    is_separator_regex: bool = True,
+    **kwargs: Any,
+):
+    results = []
+    final_chunks = []
+    separators = separators or [
+        "\n\n",
+        "\n",
+        "。|！|？",
+        "\.\s|\!\s|\?\s",
+        "；|;\s",
+        "，|,\s",
+    ]
+    separator = separators[-1]
+    new_separators = []
+    for i, sep in enumerate(separators):
+        _separator = sep if is_separator_regex else re.escape(sep)
+        if sep == "":
+            separator = sep
+            break
+        if re.search(_separator, content):
+            separator = sep
+            new_separators = separators[i + 1:]
+            break
+
+    _separator = separator if is_separator_regex else re.escape(separator)
+    splits = split_text_with_regex_from_end(content, _separator, keep_separator)
+
+    _good_splits = []
+    _separator = "" if keep_separator else separator
+    for split in splits:
+        if len(encode_string_by_tiktoken(split, model_name=tiktoken_model)) <= max_token_size:
+            _good_splits.append(split)
+        else:
+            if _good_splits:
+                merged_content = merge_splits(_good_splits, _separator)
+                final_chunks.extend(merged_content)
+                _good_splits = []
+            if not new_separators:
+                final_chunks.append(split)
+            else:
+                other_info = chunking_by_sentence(
+                    split,
+                    overlap_token_size=overlap_token_size,
+                    max_token_size=max_token_size,
+                    tiktoken_model=tiktoken_model,
+                    separators=new_separators,
+                    keep_separator=keep_separator,
+                    is_separator_regex=is_separator_regex,
+                    **kwargs,
+                )
+                final_chunks.extend(other_info)
+    if _good_splits:
+        merged_content = merge_splits(_good_splits, _separator)
+        final_chunks.extend(merged_content)
+
+    # # Extract content from each chunk dictionary
+    # final_chunks = [chunk["content"] for chunk in final_chunks]
+
+    final_chunks = clean_and_filter_chunks(final_chunks)
+    results = [
+        {
+            "tokens": len(encode_string_by_tiktoken(chunk, model_name=tiktoken_model)),
+            "content": chunk.strip(),
+            "chunk_order_index": index,
+        }
+        for index, chunk in enumerate(final_chunks)
+    ]
+
     return results
 
 
